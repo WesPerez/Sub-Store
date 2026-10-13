@@ -211,11 +211,15 @@ def verify_client_copy(password):
         def copy(button, expected_path):
             page.evaluate("navigator.clipboard.writeText('')")
             button.click()
-            page.wait_for_function(
-                'prefix => navigator.clipboard.readText().then(value => value.startsWith(prefix))',
-                arg=BASE + expected_path, timeout=15000,
-            )
-            return page.evaluate('navigator.clipboard.readText()')
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                # wait_for_function treats a returned Promise as truthy before it resolves.
+                # Evaluate awaits readText; poll its actual value instead of the Promise.
+                value = page.evaluate('navigator.clipboard.readText()')
+                if value.startswith(BASE + expected_path):
+                    return value
+                page.wait_for_timeout(50)
+            raise AssertionError('Client copy did not write the expected share URL')
 
         try:
             page.goto(BASE + '/files', wait_until='networkidle')
