@@ -12,7 +12,7 @@ import tempfile
 import threading
 import time
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -91,7 +91,7 @@ def api(path, password, *, data=None, method=None):
 
 
 def verify_http(password, gateway, port):
-    for path in ('/', '/backend/api/subs', '/backend/api/utils/env'):
+    for path in ('/', '/backend/api/subs', '/backend/api/utils/env', '/backend/api/file/mihomo'):
         assert request(BASE + path)[0] == 401
     for path in ('/api/subs', '/download/source-a'):
         assert request(BASE + path)[0] == 404
@@ -178,6 +178,123 @@ def verify_browser(password):
         browser.close()
 
 
+def verify_client_copy(password):
+    """Exercise the actual copy buttons, then download without browser credentials."""
+    from playwright.sync_api import sync_playwright
+
+    def shares(kind, name):
+        return api('/tokens?' + urlencode({'type': kind, 'name': name}), password)
+
+    def verify_file_url(url):
+        parsed = urlsplit(url)
+        assert parsed.scheme == 'http' and parsed.netloc == '127.0.0.1:18080', parsed
+        assert parsed.path == '/substore/share/file/mihomo', parsed.path
+        token = parse_qs(parsed.query)['token'][0]
+        code, body, _ = request(url)
+        assert code == 200 and all(value in body for value in (
+            'CI-Node-A', 'CI-Node-B', 'mixed-port: 7890', 'proxy-groups:', 'MATCH,Proxy',
+        )), (code, body)
+        assert request(BASE + parsed.path.removeprefix('/substore'))[0] == 404
+        assert request(url.replace(token, 'invalid-token'))[0] == 404
+        assert request(API + '/file/mihomo')[0] == 401
+        return token
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        context = browser.new_context(http_credentials={'username': 'ci', 'password': password},
+                                      permissions=['clipboard-read', 'clipboard-write'],
+                                      viewport={'width': 1440, 'height': 1000}, locale='zh-CN')
+        page = context.new_page()
+        errors = []
+        page.on('pageerror', lambda error: errors.append(str(error)))
+
+        def copy(button, expected_path):
+            page.evaluate("navigator.clipboard.writeText('')")
+            button.click()
+            page.wait_for_function(
+                'prefix => navigator.clipboard.readText().then(value => value.startsWith(prefix))',
+                arg=BASE + expected_path, timeout=15000,
+            )
+            return page.evaluate('navigator.clipboard.readText()')
+
+        try:
+            page.goto(BASE + '/files', wait_until='networkidle')
+            button = page.locator('[data-testid="copy-file-client-link"][data-source-name="mihomo"]')
+            before = shares('file', 'mihomo')
+            original = copy(button, '/share/file/mihomo?')
+            token = verify_file_url(original)
+            assert token in [item['token'] for item in before]
+            assert shares('file', 'mihomo') == before, 'Copy must reuse an existing valid share'
+
+            # Revoke on the server while the page stays open, leaving only an expired token.
+            api('/token/' + token + '?type=file&name=mihomo', password, method='DELETE')
+            api('/token', password, data={'payload': {'type': 'file', 'name': 'mihomo'},
+                                         'options': {'mode': 'datetime', 'exp': 1600000000000}})
+            expired = shares('file', 'mihomo')
+            replacement = copy(button, '/share/file/mihomo?')
+            assert verify_file_url(replacement) != token
+            assert request(original)[0] == 404
+            after = shares('file', 'mihomo')
+            assert len(after) == len(expired) + 1
+            assert all(item in after for item in expired), 'Copy must preserve expired share records'
+            assert any(item.get('expiresIn') == '3650d' for item in after)
+            assert copy(button, '/share/file/mihomo?') == replacement
+            assert shares('file', 'mihomo') == after, 'Repeated copying must not create extra tokens'
+
+            # A failed share lookup must not copy a protected API URL as a fallback.
+            page.route('**/backend/api/tokens?**', lambda route: route.fulfill(
+                status=503, content_type='application/json',
+                body=json.dumps({'status': 'failed', 'error': {'message': 'Synthetic share failure'}}),
+            ))
+            page.evaluate("navigator.clipboard.writeText('unchanged')")
+            button.click()
+            page.get_by_text('复制文件链接失败', exact=False).first.wait_for(timeout=15000)
+            assert page.evaluate('navigator.clipboard.readText()') == 'unchanged'
+            page.unroute('**/backend/api/tokens?**')
+
+            page.goto(BASE + '/subs', wait_until='networkidle')
+            for kind, name, title in (('sub', 'source-b', 'CI Source B'),
+                                      ('col', 'all-nodes', 'All CI Nodes')):
+                card = page.locator('.sub-item-wrapper').filter(
+                    has=page.locator(f'h3[title="{title}"]'))
+                button = page.locator('[data-testid="copy-subscription-client-link"]'
+                                      f'[data-source-name="{name}"]')
+                if button.count() == 0:
+                    card.locator('button:has(svg[data-icon="ellipsis"])').click()
+                url = copy(button, f'/share/{kind}/{name}?')
+                assert request(url + '&target=ClashMeta')[0] == 200
+                assert len(shares(kind, name)) == 1
+
+            # The per-client format picker must retain its selected output options.
+            card = page.locator('.sub-item-wrapper').filter(has=page.locator(
+                '[data-testid="copy-subscription-client-link"][data-source-name="all-nodes"]'))
+            card.locator('.sub-item-name').click()
+            platform_button = page.locator('[data-testid="copy-platform-client-link"][data-target="ClashMeta"]')
+            url = copy(platform_button, '/share/col/all-nodes?')
+            assert parse_qs(urlsplit(url).query)['target'] == ['ClashMeta']
+            assert request(url)[0] == 200
+            assert len(shares('col', 'all-nodes')) == 1
+            assert not errors, errors
+            page.goto(BASE + '/files', wait_until='networkidle')
+            page.screenshot(path=str(OUTPUT / 'client-copy.png'), full_page=True)
+            (OUTPUT / 'client-copy.json').write_text(json.dumps({
+                'status': 'passed', 'copied_file_path': '/substore/share/file/mihomo',
+                'unauthenticated_download': 200, 'management_download': 401,
+                'existing_token_reused': True, 'revoked_token_rejected': True,
+                'expired_token_preserved': True, 'replacement_token_reused': True,
+                'lookup_failure_preserved_clipboard': True, 'platform_target_preserved': True,
+                'page_errors': errors,
+            }, indent=2) + '\n')
+        except Exception:
+            page.screenshot(path=str(OUTPUT / 'client-copy-failure.png'), full_page=True)
+            (OUTPUT / 'client-copy-failure.json').write_text(json.dumps({
+                'url': page.url, 'body': page.locator('body').inner_text(), 'page_errors': errors,
+            }, ensure_ascii=False, indent=2) + '\n')
+            raise
+        finally:
+            browser.close()
+
+
 def main():
     if os.environ.get('GITHUB_ACTIONS') != 'true' or os.environ.get('RUNNER_ENVIRONMENT') != 'github-hosted':
         raise SystemExit('Synthetic deployment acceptance runs only on a GitHub-hosted runner')
@@ -215,12 +332,15 @@ def main():
             wait_ready(BASE + '/', 401)
             verify_http(password, gateway, upstream.server_address[1])
             verify_browser(password)
+            verify_client_copy(password)
             state = json.loads(command('docker', 'inspect', '--format', '{{json .State}}', 'sub-store-ci'))
             assert state['Health']['Status'] == 'healthy', state['Health']['Status']
             (OUTPUT / 'acceptance.json').write_text(json.dumps({'status': 'passed', 'revision': os.environ['GITHUB_SHA'],
                 'checks': ['management-auth', 'subpath-ui', 'remote-flow-headers', 'local-flow', 'collection-all-nodes',
                            'unchanged-upstream-hosts', 'share-scoping', 'invalid-token', 'revoked-token',
-                           'mihomo-template', 'pwa-scope', 'container-health']}, indent=2) + '\n')
+                           'mihomo-template', 'client-copy-share-url', 'client-copy-token-reuse',
+                           'client-copy-revocation', 'client-copy-failure', 'client-copy-platform',
+                           'pwa-scope', 'container-health']}, indent=2) + '\n')
             print('Sub-Store HTTP, browser, subscription metadata and share acceptance passed')
         finally:
             for container in ('sub-store-ci', 'sub-store-ci-nginx'):

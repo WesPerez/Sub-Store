@@ -28,11 +28,122 @@ def replace_once(root, name, before, after):
     path.write_text(source.replace(before, after, 1))
 
 
+def prepare_client_copy(root):
+    helper = root / 'src/utils/clientShare.ts'
+    if helper.exists():
+        raise ValueError('Frontend client-share helper already exists')
+    for component, quote in (('FileListItem', "'"), ('SubListItem', '"'), ('PreviewPanel', "'")):
+        replace_once(root, f'src/components/{component}.vue',
+                     f'import {{ copyText }} from {quote}@/utils/clipboard{quote};',
+                     f'import {{ copyText }} from {quote}@/utils/clipboard{quote};\n'
+                     "import { getClientShareUrl } from '@/utils/clientShare';")
+
+    replace_once(root, 'src/components/FileListItem.vue',
+                 '<button class="copy-sub-link" @click.stop="onClickCopyLink">',
+                 '<button class="copy-sub-link" data-testid="copy-file-client-link" '
+                 ':data-source-name="name" title="复制客户端订阅" aria-label="复制客户端订阅" '
+                 ':disabled="props.disabled || copyingClientLink" @click.stop="onClickCopyLink">')
+    replace_once(root, 'src/components/FileListItem.vue',
+                 '''  const onClickCopyLink = async () => {
+    const path = `/api/file/${encodeURIComponent(name)}`;
+    const url = `${host.value}${path}`;
+
+    try {
+      await copyText(url);
+      showNotify({ title: t('filePage.copyNotify.succeed', { path }) });
+    } catch (error) {
+      Toast.fail(t("filePage.copyNotify.failed", { e: error?.message ?? String(error) }));
+    }
+  };''',
+                 '''  const copyingClientLink = ref(false);
+  const onClickCopyLink = async () => {
+    if (props.disabled || copyingClientLink.value) return;
+    copyingClientLink.value = true;
+    try {
+      await copyText(await getClientShareUrl('file', name));
+      showNotify({ title: '已复制客户端订阅链接，可在「分享」查看有效期或撤销' });
+    } catch (error) {
+      Toast.fail(t("filePage.copyNotify.failed", { e: error?.message ?? String(error) }));
+    } finally {
+      copyingClientLink.value = false;
+    }
+  };''')
+
+    replace_once(root, 'src/components/SubListItem.vue',
+                 '<button class="copy-sub-link" @click.stop="onClickCopyLink">',
+                 '<button class="copy-sub-link" data-testid="copy-subscription-client-link" '
+                 ':data-source-name="name" title="复制客户端订阅" aria-label="复制客户端订阅" '
+                 ':disabled="props.disabled || copyingClientLink" @click.stop="onClickCopyLink">')
+    replace_once(root, 'src/components/SubListItem.vue',
+                 '''const onClickCopyLink = async () => {
+  const url = `${host.value}/download/${
+    props.type === "collection" ? "collection/" : ""
+  }${encodeURIComponent(name)}`;
+
+  try {
+    await copyText(url);
+    showNotify({ title: t(`subPage.copyNotify.${shareBtnVisible.value ? "succeedWithShare" : "succeed"}`) });
+  } catch (error) {
+    Toast.fail(t("subPage.copyNotify.failed", { e: error?.message ?? String(error) }));
+  }
+};''',
+                 '''const copyingClientLink = ref(false);
+const onClickCopyLink = async () => {
+  if (props.disabled || copyingClientLink.value) return;
+  copyingClientLink.value = true;
+  try {
+    await copyText(await getClientShareUrl(props.type === 'collection' ? 'col' : 'sub', name));
+    showNotify({ title: '已复制客户端订阅链接，可在「分享」查看有效期或撤销' });
+  } catch (error) {
+    Toast.fail(t("subPage.copyNotify.failed", { e: error?.message ?? String(error) }));
+  } finally {
+    copyingClientLink.value = false;
+  }
+};''')
+
+    replace_once(root, 'src/components/PreviewPanel.vue',
+                 '<button class="copy-sub-link" @click.stop="targetCopy(platform.path)">',
+                 '<button class="copy-sub-link" data-testid="copy-platform-client-link" '
+                 ':data-target="platform.path || \'auto\'" :disabled="copyingClientLink" '
+                 '@click.stop="targetCopy(platform.path)">')
+    replace_once(root, 'src/components/PreviewPanel.vue',
+                 '''  const targetCopy = async (path: string) => {
+    const url = getUrl(path);
+    try {
+      await copyText(url);
+      showNotify({ title: notify });
+    } catch (error) {
+      Toast.fail(t("globalNotify.copyFailed", { e: error?.message ?? String(error) }));
+    }
+  };''',
+                 '''  const copyingClientLink = ref(false);
+  const targetCopy = async (path: string) => {
+    if (copyingClientLink.value) return;
+    copyingClientLink.value = true;
+    try {
+      let clientUrl = getUrl(path);
+      if (!url) {
+        const shared = new URL(await getClientShareUrl(type === 'collection' ? 'col' : 'sub', name));
+        new URL(clientUrl).searchParams.forEach((value, key) => shared.searchParams.set(key, value));
+        clientUrl = shared.href;
+      }
+      await copyText(clientUrl);
+      showNotify({ title: '已复制客户端订阅链接，可在「分享」查看有效期或撤销' });
+    } catch (error) {
+      Toast.fail(t("globalNotify.copyFailed", { e: error?.message ?? String(error) }));
+    } finally {
+      copyingClientLink.value = false;
+    }
+  };''')
+    helper.write_text((ROOT / 'scripts/frontend-client-share.ts').read_text())
+
+
 def prepare(root):
     config = settings()
     revision = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
     if revision != config['revision']:
         raise ValueError('Frontend checkout differs from the pinned commit')
+    prepare_client_copy(root)
     replace_once(root, 'src/router/index.ts', 'createWebHistory()',
                  'createWebHistory(import.meta.env.BASE_URL)')
     replace_once(root, 'src/store/subs.ts',
