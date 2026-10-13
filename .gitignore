@@ -142,3 +142,9 @@ CHANGELOG.md
 CODEMAP.md
 CONTEXT_BUNDLE.md
 mydocs
+
+# Mine deployment: upstream frontend checkout and local acceptance outputs
+frontend-src/
+__pycache__/
+acceptance-output/
+image-metadata.json

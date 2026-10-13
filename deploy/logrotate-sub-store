@@ -1,0 +1,14 @@
+/var/log/sub-store/*.log {
+    daily
+    rotate 3
+    maxsize 5M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    create 0640 www-data adm
+    sharedscripts
+    postrotate
+        /usr/sbin/nginx -s reopen >/dev/null 2>&1 || true
+    endscript
+}

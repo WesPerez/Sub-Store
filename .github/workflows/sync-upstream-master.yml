@@ -1,0 +1,30 @@
+name: Sync upstream master
+
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sub-store-upstream-master
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'WesPerez/Sub-Store'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: master
+          fetch-depth: 0
+      - name: Fast-forward only the upstream mirror
+        run: |
+          git remote add upstream https://github.com/sub-store-org/Sub-Store.git
+          git fetch --no-tags upstream master
+          git merge --ff-only FETCH_HEAD
+          git push origin HEAD:master

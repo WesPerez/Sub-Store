@@ -1,0 +1,27 @@
+services:
+  sub-store:
+    image: ${SUB_STORE_IMAGE:?Set the CI-verified image digest}
+    container_name: sub-store
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:13001:3000"
+    environment:
+      TZ: Asia/Shanghai
+      SUB_STORE_CORS_ALLOWED_ORIGINS: https://weesai.com
+    volumes:
+      - /var/lib/sub-store/data:/opt/app/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"

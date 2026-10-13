@@ -1,0 +1,10 @@
+**
+!backend/
+!backend/dist/
+!backend/dist/sub-store.bundle.js
+!backend/dist/runtime-manifest.json
+!frontend-src/
+!frontend-src/dist/
+!frontend-src/dist/**
+!deploy/
+!deploy/container-health.mjs

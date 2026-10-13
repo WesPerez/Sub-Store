@@ -1,0 +1,12 @@
+{
+  "id": "sub-store",
+  "repository": "WesPerez/Sub-Store",
+  "kind": "compose",
+  "workflow": ".github/workflows/verify.yml",
+  "name": "sub-store",
+  "required_jobs": [
+    "verify"
+  ],
+  "source_path": "deploy/auto-update",
+  "branch": "mine"
+}

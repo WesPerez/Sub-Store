@@ -1,0 +1,25 @@
+# Managed by sub-store/auto-update
+[Unit]
+Description=Update sub-store from verified hosted CI
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/sub-store/auto-update.json
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=GH_PROMPT_DISABLED=1
+ExecStart=/usr/local/sbin/sub-store-auto-update poll --apply
+TimeoutStartSec=30min
+TimeoutStopSec=180s
+KillSignal=SIGINT
+KillMode=mixed
+Nice=10
+CPUQuota=80%
+MemoryMax=1G
+StandardOutput=journal
+StandardError=journal
+LogRateLimitIntervalSec=60s
+LogRateLimitBurst=30

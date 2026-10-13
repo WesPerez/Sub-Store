@@ -13,6 +13,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   build:
+    if: github.repository == 'sub-store-org/Sub-Store'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

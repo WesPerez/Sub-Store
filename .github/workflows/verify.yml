@@ -1,0 +1,104 @@
+name: Verify and publish Sub-Store
+
+on:
+  push:
+    branches: [mine]
+  pull_request:
+    branches: [mine]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sub-store-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    if: github.repository == 'WesPerez/Sub-Store'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: write
+      packages: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Check available space
+        run: df -h . /tmp
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+      - name: Enable the pinned package manager
+        run: corepack enable
+      - name: Install backend dependencies from the lockfile
+        working-directory: backend
+        run: pnpm install --frozen-lockfile
+      - name: Test and bundle backend
+        working-directory: backend
+        run: |
+          pnpm test
+          pnpm bundle:esbuild
+      - name: Read pinned frontend identity
+        id: frontend
+        run: python3 -B scripts/frontend.py metadata
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ steps.frontend.outputs.repository }}
+          ref: ${{ steps.frontend.outputs.revision }}
+          path: frontend-src
+          persist-credentials: false
+      - name: Adapt the frontend subpath
+        run: python3 -B scripts/frontend.py prepare
+      - name: Install and build frontend
+        working-directory: frontend-src
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+      - name: Verify frontend output and automatic updater
+        run: |
+          python3 -B scripts/frontend.py verify
+          python3 -B -m unittest discover -s deploy/auto-update/tests -p 'test_*.py' -v
+      - name: Build the runtime image on the hosted runner
+        env:
+          FRONTEND_SHA: ${{ steps.frontend.outputs.revision }}
+        run: |
+          docker build --build-arg SOURCE_SHA="$GITHUB_SHA" \
+            --build-arg FRONTEND_SHA="$FRONTEND_SHA" \
+            --tag "ghcr.io/wesperez/sub-store:sha-$GITHUB_SHA" .
+      - name: Install isolated browser acceptance tools
+        run: |
+          python3 -m venv "$RUNNER_TEMP/substore-browser"
+          "$RUNNER_TEMP/substore-browser/bin/pip" install playwright==1.55.0
+          "$RUNNER_TEMP/substore-browser/bin/python" -m playwright install --with-deps chromium
+      - name: Verify Nginx, browser, traffic metadata and share downloads
+        env:
+          SUBSTORE_TEST_IMAGE: ghcr.io/wesperez/sub-store:sha-${{ github.sha }}
+        run: '"$RUNNER_TEMP/substore-browser/bin/python" -B scripts/acceptance.py'
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/mine'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish the accepted image and record its digest
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/mine'
+        run: python3 -B scripts/publish-image.py
+      - name: Package verified updater
+        run: python3 -B deploy/auto-update/package.py --output "$RUNNER_TEMP/auto-update.tar.gz"
+      - name: Save immutable CI evidence
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/mine'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 -B scripts/ci_release_artifacts.py --name image-metadata --path image-metadata.json
+          python3 -B scripts/ci_release_artifacts.py --name auto-update --path "$RUNNER_TEMP/auto-update.tar.gz"
+      - name: Save synthetic acceptance evidence
+        if: always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/mine'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 -B scripts/ci_release_artifacts.py --name acceptance-evidence --path acceptance-output --if-no-files-found ignore
