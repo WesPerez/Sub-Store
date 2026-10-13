@@ -194,7 +194,9 @@ def main():
         compose_file = root / 'docker-compose.yml'
         compose_file.write_text((ROOT / 'deploy/docker-compose.yml').read_text()
                                 .replace('/var/lib/sub-store/data', str(data))
-                                .replace('container_name: sub-store', 'container_name: sub-store-ci'))
+                                .replace('container_name: sub-store', 'container_name: sub-store-ci')
+                                .replace('SUB_STORE_CORS_ALLOWED_ORIGINS: https://weesai.com',
+                                         'SUB_STORE_CORS_ALLOWED_ORIGINS: http://127.0.0.1:18080'))
         compose = ['docker', 'compose', '--project-name', 'sub-store-ci', '-f', str(compose_file)]
         environment = {**os.environ, 'SUB_STORE_IMAGE': image}
         password = secrets.token_urlsafe(18)
