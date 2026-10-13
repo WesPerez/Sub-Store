@@ -34,6 +34,15 @@ def load_config(path):
     state = Path(config.get('state_root', str(STATE)))
     if not state.is_absolute() or state.resolve() != state:
         raise Rejected('State root must be an absolute path without symlinks')
+    if app['kind'] == 'compose':
+        if any(not isinstance(app.get(key), str) or not app[key] for key in
+               ('image', 'image_variable', 'image_artifact', 'compose_service', 'container')):
+            raise Rejected('Compose image and service contract is incomplete')
+        for name in app.get('data_directories', []):
+            path = Path(name)
+            if (not path.is_absolute() or path.resolve() != path or path == state
+                    or state in path.parents or path in state.parents):
+                raise Rejected('Application data and updater state must be separate absolute directories')
     for filename in app.get('files', []):
         if Path(filename).is_absolute() or '..' in Path(filename).parts:
             raise Rejected('Runtime file escapes the application root')

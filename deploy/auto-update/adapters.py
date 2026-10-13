@@ -154,6 +154,8 @@ def snapshot_databases(app, destination):
 
 def snapshot_directories(app, destination):
     """Copy regular application data while stopped; never restore it automatically."""
+    destination = Path(destination)
+    destination.mkdir(mode=0o700, parents=True, exist_ok=True)
     result = []
     for index, filename in enumerate(app.get('data_directories', [])):
         root = Path(filename)
@@ -167,7 +169,7 @@ def snapshot_directories(app, destination):
             if not stat.S_ISREG(mode) and not stat.S_ISDIR(mode):
                 raise Deferred('Data recovery cannot follow links or special files')
         required = sum(path.stat().st_size for path in paths if path.is_file())
-        if shutil.disk_usage(root).free < required + 1024**3:
+        if shutil.disk_usage(destination).free < required + 1024**3:
             raise Deferred('Not enough space for a consistent data recovery copy')
         target = destination / str(index)
         target.mkdir(mode=0o700, parents=True)
@@ -178,7 +180,7 @@ def snapshot_directories(app, destination):
             if path.is_dir():
                 copy.mkdir(mode=0o700, exist_ok=True)
             else:
-                shutil.copy2(path, copy, follow_symlinks=False)
+                shutil.copyfile(path, copy, follow_symlinks=False)
                 copy.chmod(0o600)
                 hashes[str(relative)] = digest(copy)
                 if hashes[str(relative)] != digest(path):
@@ -512,13 +514,19 @@ def deploy(app, prepared, verified, source, directory, expected):
                 write_json(directory / 'transaction.json', record)
                 raise Rejected('Deployment and recovery failed; operator action required') from None
             write_json(directory / 'transaction.json', record)
-            if record.get('databases') is None and isinstance(error, Deferred):
+            write_json(recovery / 'result.json', {**record, 'project': app['id']})
+            retire_completed_recoveries(app, directory, record)
+            if not record.get('switch_started') and isinstance(error, Deferred):
+                shutil.rmtree(recovery)
+                record['recovery_discarded'] = True
+                write_json(directory / 'transaction.json', record)
                 raise Deferred('Service transition was busy; predecessor restored') from None
             raise Rejected('Candidate failed acceptance; previous code restored with live data preserved') from None
         # Acceptance is the commit boundary. Metadata/retention failures must
         # never stop an accepted service or claim its code was rolled back.
         record.update(state='success', finished_at=now())
         write_json(directory / 'transaction.json', record)
+        write_json(recovery / 'result.json', {**record, 'project': app['id']})
         finalize(app, directory, record)
         return record
 
@@ -558,6 +566,36 @@ def finalize(app, directory, record):
     record['bookkeeping_complete'] = True
     write_json(directory / 'transaction.json', record)
     retry_retention(directory, record['recovery'])
+    retire_completed_recoveries(app, directory, record)
+
+
+def retire_completed_recoveries(app, directory, record):
+    """Retire only marked completed copies after a verified replacement exists."""
+    if app['kind'] != 'compose' or not record.get('data_directories'):
+        return
+    directory = Path(directory)
+    current = Path(record['recovery'])
+    try:
+        if digest(current / 'previous.env') != record['code']['env_sha256']:
+            return
+        for copy in record['data_directories']:
+            if any(digest(Path(copy['backup']) / name) != value for name, value in copy['files'].items()):
+                return
+        deployed = Path(read(directory / 'deployed.json', {}).get('recovery', '/nonexistent'))
+        for path in directory.glob('recovery-*'):
+            if path in (current, deployed) or path.is_symlink() or not path.is_dir():
+                continue
+            previous = read(path / 'result.json', {})
+            if (previous.get('project') != app['id'] or previous.get('recovery') != str(path)
+                    or previous.get('state') not in ('success', 'rolled_back')):
+                continue
+            if record['state'] == 'rolled_back' and (previous['state'] != 'rolled_back'
+                    or previous.get('previous_sha') != record['previous_sha']):
+                continue
+            shutil.rmtree(path)
+    except (OSError, Rejected, KeyError):
+        # Retention never stops an accepted/restored service; retry next release.
+        return
 
 
 def retry_retention(directory, current_recovery):

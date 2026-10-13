@@ -147,7 +147,7 @@ class Source:
                 if result.returncode:
                     raise Deferred('CI standby is not ready; inspect gci status') from None
                 raise Deferred('CI standby is building or preserving this exact revision') from None
-            if candidate.get('conclusion') == 'failure':
+            if candidate.get('conclusion') in ('failure', 'cancelled', 'skipped', 'neutral'):
                 raise Deferred('Main CI failed; waiting for a corrected main commit') from None
             raise Rejected('Verified CI contract is incomplete: ' + str(error)) from None
 

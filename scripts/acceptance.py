@@ -155,7 +155,15 @@ def verify_browser(password):
         for suffix in ('/subs', '/subs/'):
             flow_names.clear()
             page.goto(BASE + suffix, wait_until='networkidle')
-            page.wait_for_function("document.body.innerText.includes('3 GB / 10 GB')", timeout=30000)
+            try:
+                page.wait_for_function("document.body.innerText.includes('3 GB / 10 GB')", timeout=30000)
+            except Exception:
+                page.screenshot(path=str(OUTPUT / 'failure.png'), full_page=True)
+                details = {'url': page.url, 'body': page.locator('body').inner_text(),
+                           'page_errors': errors, 'responses': responses, 'flow_sources': sorted(flow_names)}
+                (OUTPUT / 'failure.json').write_text(json.dumps(details, indent=2) + '\n')
+                print(json.dumps(details, ensure_ascii=False), flush=True)
+                raise
             assert {'source-a', 'source-b'} <= flow_names, flow_names
             assert '/substore/subs' in page.url
         page.wait_for_function("navigator.serviceWorker.getRegistration().then(r => !!r)", timeout=30000)

@@ -259,6 +259,40 @@ class TransactionTests(unittest.TestCase):
         self.assertEqual(common.read(self.state / 'transaction.json')['state'], 'rolled_back')
         self.assertEqual(common.read(self.root / 'deployment.json')['source_sha'], A)
 
+    def test_directory_snapshot_failure_defers_without_quarantining_the_candidate(self):
+        with patch.object(adapters, 'preflight'), patch.object(adapters, 'systemctl'), \
+             patch.object(adapters, 'probe'), \
+             patch.object(adapters, 'snapshot_directories', side_effect=common.Deferred('disk busy')):
+            with self.assertRaises(common.Deferred):
+                adapters.deploy(self.app, self.prepared, self.verified, None, self.state, A)
+        self.assertEqual((self.root / 'app').read_bytes(), b'old executable')
+        self.assertFalse(list(self.state.glob('recovery-*')))
+        self.assertTrue(common.read(self.state / 'transaction.json')['recovery_discarded'])
+
+    def test_repeated_failed_candidates_retain_only_the_latest_completed_copy(self):
+        current = self.state / 'recovery-current'
+        current.mkdir()
+        (current / 'previous.env').write_text('SUB_STORE_IMAGE=synthetic\n')
+        data = current / 'data'
+        data.mkdir()
+        (data / 'state.json').write_text('{}')
+        app = {**self.app, 'kind': 'compose'}
+        record = {'state': 'rolled_back', 'recovery': str(current), 'previous_sha': A,
+                  'code': {'env_sha256': common.digest(current / 'previous.env')},
+                  'data_directories': [{'backup': str(data), 'files': {'state.json': common.digest(data / 'state.json')}}]}
+        for name, state in [('old-failed', 'rolled_back'), ('unfinished', 'rollback_failed'), ('accepted', 'success')]:
+            path = self.state / ('recovery-' + name)
+            path.mkdir()
+            common.write_json(path / 'result.json', {'project': self.app['id'], 'state': state,
+                'recovery': str(path), 'previous_sha': A})
+        manual = self.state / 'recovery-manual'
+        manual.mkdir()
+        adapters.retire_completed_recoveries(app, self.state, record)
+        self.assertFalse((self.state / 'recovery-old-failed').exists())
+        self.assertTrue((self.state / 'recovery-unfinished').exists())
+        self.assertTrue((self.state / 'recovery-accepted').exists())
+        self.assertTrue(manual.exists())
+
     def test_success_keeps_one_verified_predecessor(self):
         with patch.object(adapters, 'preflight'), patch.object(adapters, 'systemctl'), patch.object(adapters, 'probe'):
             result = adapters.deploy(self.app, self.prepared, self.verified, None, self.state, A)
