@@ -9,6 +9,9 @@ import time
 
 from common import PROJECT, Deferred, Rejected, SHA, DIGEST, digest, run
 
+import ci_router
+from common import PROJECT
+
 EVIDENCE_PATH = Path(__file__).with_name('ci_evidence.py')
 spec = importlib.util.spec_from_file_location('auto_deploy_ci_evidence', EVIDENCE_PATH)
 evidence = importlib.util.module_from_spec(spec)
@@ -87,8 +90,24 @@ class Source:
             raise Deferred('Cannot prove the deployed revision ancestry')
         return result.returncode == 0
 
+    def routed_candidate(self, sha):
+        try:
+            return ci_router.candidate(self.repo, self.app['workflow'],
+                                       'refs/heads/' + PROJECT.get('branch', 'main'), sha)
+        except RuntimeError as error:
+            raise Deferred(str(error)) from None
+
     def candidate(self, current):
         head = self.sync()
+        routed = self.routed_candidate(head)
+        if routed:
+            if head == current:
+                return None
+            if not self.ancestor(current, head):
+                raise Rejected('Routed candidate would move the application backwards')
+            if routed.get('status') != 'completed':
+                raise Deferred('CI router is building or preserving this revision')
+            return routed
         workflow = self.app['workflow'].split('/')[-1]
         rows = self.github.api(f'repos/{self.repo}/actions/workflows/{workflow}/runs?branch={PROJECT["branch"]}&per_page=50')['workflow_runs']
         rows = [r for r in rows if r.get('event') in ('push', 'workflow_dispatch')
@@ -128,6 +147,13 @@ class Source:
             name.startswith(prefix) for prefix in policy.get('prefixes', [])) for name in names)
 
     def verified(self, candidate):
+        if candidate.get('router_request'):
+            try:
+                return ci_router.verified(self.repo, self.app['workflow'],
+                    'refs/heads/' + PROJECT.get('branch', 'main'), candidate['head_sha'],
+                    candidate['router_request'], self.app.get('required_jobs', PROJECT.get('required_jobs', [])))
+            except RuntimeError as error:
+                raise Deferred(str(error)) from None
         try:
             return evidence.verified_run(self.github, self.repo, candidate['id'], self.app['workflow'],
                                          'refs/heads/' + PROJECT['branch'], candidate['head_sha'], self.app.get('required_jobs', []))

@@ -64,6 +64,17 @@ def valid_rejection(rejection):
             rejection.get("actions_enabled") is True and rejection.get("workflow_state") == "active")
 
 
+def valid_authorization(value):
+    """A durable controller decision, distinct from a fabricated GitHub rejection."""
+    return (isinstance(value, dict) and value.get('kind') == 'billing_cycle_skip'
+            and positive(value.get('account_id'))
+            and re.fullmatch(r'[0-9]{4}-(0[1-9]|1[0-2])', str(value.get('cycle', ''))) is not None
+            and isinstance(value.get('proof'), dict)
+            and value['proof'].get('kind') == 'zero_execution_billing'
+            and positive(value['proof'].get('run_id'))
+            and positive(value['proof'].get('run_attempt')))
+
+
 def digest(data):
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
@@ -277,12 +288,22 @@ def verified_run(github, repository, run_id, workflow, ref, sha, required_jobs=(
                                receipt_asset.get("digest"), receipt_asset.get("size"))
         receipt_digest = digest(raw)
         receipt = document(raw)
-        require(receipt.get("schema_version") == (2 if request_id else 1) and receipt.get("kind") == "ci-fallback-receipt",
+        require(receipt.get("schema_version") in ((2, 3) if request_id else (1,)) and receipt.get("kind") == "ci-fallback-receipt",
                 "Unsupported standby receipt")
         recorded = receipt["source"]
+        if request_id and receipt.get('schema_version') == 3:
+            require(recorded.get('kind') == 'routed_request' and recorded.get('event') in ('push', 'workflow_dispatch'),
+                    'Unsupported routed deployment event')
+            source.update(kind='routed_request', event=recorded['event'])
+            conclusion = 'billing_cycle_skipped'
         require(all(recorded.get(key) == value for key, value in source.items()), "Standby receipt source mismatch")
         if request_id:
-            require(valid_rejection(recorded.get("rejection")), "Unverified pre-dispatch rejection")
+            if receipt.get('schema_version') == 3:
+                authorization = recorded.get('authorization')
+                require(valid_authorization(authorization) and authorization['account_id'] == metadata['owner']['id'],
+                        'Invalid routed request authorization')
+            else:
+                require(valid_rejection(recorded.get("rejection")), "Unverified pre-dispatch rejection")
         inputs_digest = recorded.get("dispatch_inputs_sha256")
         require(not request_id or isinstance(inputs_digest, str), "Missing recorded dispatch input digest")
         require(inputs_digest is None or (isinstance(inputs_digest, str) and

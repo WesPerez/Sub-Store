@@ -15,7 +15,7 @@ import updater
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--sha', required=True, help='Complete production-branch Git SHA')
-    parser.add_argument('--run-id', required=True, type=int, help='Source repository CI run ID')
+    parser.add_argument('--run-id', required=True, type=evidence.source_id, help='Source GitHub run ID or request-UUID')
     parser.add_argument('--config', type=Path, help='Initial reviewed config; existing host config is preserved')
     parser.add_argument('--enable', action='store_true', help='Enable this project timer')
     args = parser.parse_args()

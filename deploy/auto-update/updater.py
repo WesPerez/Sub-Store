@@ -147,6 +147,9 @@ def refresh(source, current, directory):
     rows = source.github.api(f'repos/{source.repo}/actions/workflows/{workflow}/runs?branch={PROJECT["branch"]}&head_sha={current}&per_page=10')['workflow_runs']
     rows = [r for r in rows if r.get('head_sha') == current and r.get('event') in ('push', 'workflow_dispatch')
             and r.get('path') == PROJECT['workflow'] and r.get('head_branch') == PROJECT['branch'] and r.get('status') == 'completed']
+    routed = source.routed_candidate(current)
+    if routed:
+        rows.insert(0, routed)
     if not rows:
         raise Deferred('Waiting for the running revision CI evidence to update the watcher')
     rows.sort(key=lambda r: r.get('conclusion') != 'success')
