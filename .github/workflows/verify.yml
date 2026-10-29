@@ -17,7 +17,8 @@ concurrency:
 jobs:
   verify:
     if: github.repository == 'WesPerez/Sub-Store'
-    runs-on: ubuntu-latest
+    # Playwright 1.55 requires a supported OS image.
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     permissions:
       contents: write
