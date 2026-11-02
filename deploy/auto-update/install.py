@@ -12,6 +12,15 @@ from watch import load_config
 import updater
 
 
+def verified_installation(source, reference, sha):
+    if isinstance(reference, str) and reference.startswith('request-'):
+        # Share the watcher's exact routed proof contract and never fall back
+        # to the older standalone reader after a controller rejection.
+        return source.verified({'id': reference, 'router_request': reference, 'head_sha': sha})
+    return evidence.verified_run(source.github, PROJECT['repository'], reference,
+        PROJECT['workflow'], 'refs/heads/' + PROJECT.get('branch', 'main'), sha, PROJECT.get('required_jobs', []))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--sha', required=True, help='Complete production-branch Git SHA')
@@ -38,8 +47,7 @@ def main():
             previous = updater.installed_sha()
             if previous and not source.ancestor(previous, args.sha):
                 raise Rejected('Updater installation cannot move backwards')
-            verified = evidence.verified_run(source.github, PROJECT['repository'], args.run_id,
-                PROJECT['workflow'], 'refs/heads/' + PROJECT['branch'], args.sha, PROJECT.get('required_jobs', []))
+            verified = verified_installation(source, args.run_id, args.sha)
             prepared = updater.prepare(source, verified, Path(temporary) / 'download', force=True)
             updater.activate(prepared, verified, config_source=args.config, force=True)
     if args.enable:
