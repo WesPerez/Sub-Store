@@ -4,7 +4,6 @@ import argparse
 import json
 import os
 from pathlib import Path
-import shutil
 import sys
 import tempfile
 
@@ -105,8 +104,6 @@ def poll_app(app, state_root, *, apply):
             if not apply:
                 return status(directory, app, 'ready', deployed_sha=current, candidate_sha=sha,
                               run_id=candidate['id'], route=verified['route'])
-            if shutil.disk_usage(app['root']).free < 3 * 1024**3:
-                raise Deferred('Deployment needs at least 3 GiB free space')
             adapters.preflight(app, current)
             with tempfile.TemporaryDirectory(prefix='download-', dir=directory) as work:
                 # Fetch and validate both deliveries before stopping the app.

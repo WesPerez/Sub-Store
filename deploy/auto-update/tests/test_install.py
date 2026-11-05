@@ -1,4 +1,5 @@
 """Synthetic filesystem and service failures; never calls production APIs."""
+import errno
 import importlib.util
 import json
 from pathlib import Path
@@ -173,7 +174,7 @@ class IndependentDeliveryTests(unittest.TestCase):
         self.assertEqual(result['updater'], 'pending')
         self.assertFalse((self.root / 'synthetic/failed.json').exists())
 
-    def test_updater_download_failure_does_not_quarantine_accepted_application(self):
+    def test_updater_download_failure_below_former_space_gate_does_not_quarantine_application(self):
         source = Mock()
         source.candidate.return_value = {'head_sha': B, 'id': 2}
         source.cache = self.root / 'source.git'
@@ -185,7 +186,7 @@ class IndependentDeliveryTests(unittest.TestCase):
              patch.object(watch.adapters, 'deploy') as deploy, \
              patch.object(watch.updater, 'prepare', side_effect=common.Rejected('missing artifact')), \
              patch.object(watch.updater, 'activate'), \
-             patch.object(watch.shutil, 'disk_usage', return_value=Mock(free=10 * 1024**3)), \
+             patch('shutil.disk_usage', return_value=Mock(free=512 * 1024**2)), \
              patch('subprocess.run', return_value=Mock(returncode=1)):
             result = watch.poll_app(self.app, self.root, apply=True)
         deploy.assert_called_once()
@@ -193,6 +194,38 @@ class IndependentDeliveryTests(unittest.TestCase):
         self.assertEqual(result['deployed_sha'], B)
         self.assertEqual(result['updater'], 'pending')
         self.assertFalse((self.root / 'synthetic/failed.json').exists())
+
+    def test_full_disk_during_preparation_does_not_enter_deployment(self):
+        source = Mock()
+        source.candidate.return_value = {'head_sha': B, 'id': 2}
+        source.cache = self.root / 'source.git'
+        source.verified.return_value = {'source': {'sha': B}, 'route': 'primary'}
+        workdirs = []
+
+        def no_space(app, source, verified, work):
+            work = Path(work)
+            workdirs.append(work)
+            (work / 'partial-download').write_bytes(b'incomplete')
+            raise OSError(errno.ENOSPC, 'No space left on device')
+
+        with patch.object(watch, 'Source', return_value=source), \
+             patch.object(watch.adapters, 'current', return_value=A), \
+             patch.object(watch.adapters, 'preflight'), \
+             patch.object(watch.adapters, 'prepare', side_effect=no_space), \
+             patch.object(watch.adapters, 'deploy') as deploy, \
+             patch.object(watch.updater, 'prepare', return_value=None), \
+             patch.object(watch.updater, 'activate') as activate, \
+             patch('shutil.disk_usage', return_value=Mock(free=512 * 1024**2)), \
+             patch('subprocess.run', return_value=Mock(returncode=1)):
+            result = watch.poll_app(self.app, self.root, apply=True)
+        self.assertEqual(len(workdirs), 1)
+        deploy.assert_not_called()
+        activate.assert_not_called()
+        self.assertEqual(result['state'], 'attention')
+        self.assertEqual(result['reason'], 'Updater error: OSError')
+        self.assertFalse((self.root / 'synthetic/failed.json').exists())
+        self.assertFalse((self.root / 'synthetic/transaction.json').exists())
+        self.assertFalse(workdirs[0].exists())
 
 
 if __name__ == '__main__':

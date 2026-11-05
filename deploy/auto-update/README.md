@@ -17,6 +17,8 @@ sub-store-auto-update status
 
 安装位置为 `/usr/local/lib/sub-store-auto-update/`，入口为 `/usr/local/sbin/sub-store-auto-update`；宿主配置为 `/etc/sub-store/auto-update.json`，状态与最近一组恢复点保存在 `/var/lib/sub-store-auto-update/sub-store/`。宿主配置、恢复状态和数据只允许 root 管理。
 
-升级前停止 Sub-Store 并复制普通目录数据，拒绝符号链接和特殊文件；恢复副本保留逐文件校验和。验收通过后替代上一组由本更新器创建的恢复点，不清理手工备份、活动数据或其他项目状态。涉及不可逆格式迁移时，用 `deploy/auto-deploy.json` 的 `{"version":1,"automatic":false}` 暂停该提交的自动部署，由运维安排迁移。
+部署入口不设固定剩余磁盘空间门槛。应用产物先下载并校验，应用产物准备失败不会进入服务切换；既有备份、回滚、归档大小限制和完整性校验继续生效。CI 产物中转的全局 1 GiB 分配门槛属于 CI 控制器，不是本项目的部署条件。
+
+升级前停止 Sub-Store 并复制普通目录数据，拒绝符号链接和特殊文件；备份位置仍按实际数据大小加 1 GiB 余量检查容量，恢复副本保留逐文件校验和。验收通过后替代上一组由本更新器创建的恢复点，不清理手工备份、活动数据或其他项目状态。涉及不可逆格式迁移时，用 `deploy/auto-deploy.json` 的 `{"version":1,"automatic":false}` 暂停该提交的自动部署，由运维安排迁移。
 
 公共更新器和 CI 证据基线来自 Watchdeck；来源及本项目适配记录在仓库根的 `ci-baseline.json`。主分支选择、镜像证据、目录恢复和身份配置是本项目适配，其余交付协议保留基线行为。
