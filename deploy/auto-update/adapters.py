@@ -8,6 +8,7 @@ import re
 import shutil
 import socket
 import sqlite3
+import backup_capacity
 import stat
 import subprocess
 import time
@@ -128,6 +129,36 @@ def runtime_files(root):
                   [str(p.relative_to(root)) for p in (root / 'static').rglob('*') if p.is_file()])
 
 
+def recovery_capacity(app, destination, *, include_code=True):
+    """Estimate the complete new recovery copy before stop, then recheck under lock."""
+    plan = backup_capacity.Plan()
+    root = Path(app['root'])
+    kind = app['kind'] if include_code else None
+    if kind == 'binary':
+        plan.file(root / app['binary'], app['binary'])
+    elif kind == 'console':
+        for name in [*runtime_files(root), 'REVISION']:
+            plan.file(root / name, name)
+    elif kind == 'watchdeck':
+        if Path(app['runtime_record']).is_file():
+            plan.file(app['runtime_record'], 'previous-runtime.json')
+        # Build/dependency directories are renamed on this filesystem, not copied.
+    elif kind == 'compose':
+        plan.file(root / '.env', 'previous.env')
+    for index, filename in enumerate(app.get('databases', [])):
+        plan.file(filename, 'databases/%d-%s' % (index, Path(filename).name), sqlite=True)
+    for index, filename in enumerate(app.get('data_directories', [])):
+        plan.tree(filename, 'data/' + str(index))
+    inventory = [{'path': name, 'kind': kind, 'size': size, 'sha256': '0' * 64}
+                 for name, (kind, size) in plan.entries.items() if name]
+    plan.document('result.json', {'state': 'success', 'source_sha': '0' * 40,
+                                 'previous_sha': '0' * 40, 'inventory': inventory})
+    try:
+        return plan.check(destination)
+    except backup_capacity.CapacityError as error:
+        raise Deferred(str(error)) from None
+
+
 def snapshot_databases(app, destination):
     """Consistent recovery copy; automatic rollback never rewinds business state."""
     destination.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -168,9 +199,6 @@ def snapshot_directories(app, destination):
             mode = path.lstat().st_mode
             if not stat.S_ISREG(mode) and not stat.S_ISDIR(mode):
                 raise Deferred('Data recovery cannot follow links or special files')
-        required = sum(path.stat().st_size for path in paths if path.is_file())
-        if shutil.disk_usage(destination).free < required + 1024**3:
-            raise Deferred('Not enough space for a consistent data recovery copy')
         target = destination / str(index)
         target.mkdir(mode=0o700, parents=True)
         hashes = {}
@@ -451,6 +479,7 @@ def deploy(app, prepared, verified, source, directory, expected):
     recovery = directory / ('recovery-' + sha + '-' + uuid.uuid4().hex[:8])
     with locks(deploy_locks(app)):
         preflight(app, expected)
+        recovery_capacity(app, recovery)
         recovery.mkdir(mode=0o700)
         record = {'state': 'prepared', 'source_sha': sha, 'previous_sha': expected,
                   'started_at': now(), 'recovery': str(recovery), 'artifact_sha256': prepared['sha256'],
@@ -464,6 +493,7 @@ def deploy(app, prepared, verified, source, directory, expected):
             record['state'] = 'stopping'
             write_json(directory / 'transaction.json', record)
             stop()
+            recovery_capacity(app, recovery, include_code=False)
             record['databases'] = snapshot_databases(app, recovery / 'databases')
             record['data_directories'] = snapshot_directories(app, recovery / 'data')
             record['state'] = 'switching'

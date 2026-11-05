@@ -42,7 +42,7 @@ def prepare(source, verified, work, *, force=False):
     payload = work / 'payload'
     unpack_tar(work / 'artifact/auto-update.tar.gz', payload, prefix='auto-update', limit=4 * 1024**2)
     required = {'project.json', 'REVISION', 'watch.py', 'install.py', 'updater.py',
-                'common.py', 'sources.py', 'adapters.py', 'ci_evidence.py',
+                'common.py', 'sources.py', 'adapters.py', 'ci_evidence.py', 'backup_capacity.py',
                 'systemd/' + UNIT + '.service', 'systemd/' + UNIT + '.timer'}
     if not all((payload / name).is_file() for name in required):
         raise Rejected('Updater artifact is incomplete')

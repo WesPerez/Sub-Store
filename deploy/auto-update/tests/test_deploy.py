@@ -250,6 +250,16 @@ class TransactionTests(unittest.TestCase):
                     'units': ['synthetic.service'], 'locks': [str(root / 'lock')], 'databases': []}
         self.verified = {'source': {'sha': B, 'run_id': 2}, 'builder': {'run_id': 2}}
 
+    def test_backup_capacity_failure_does_not_stop_or_create_transaction(self):
+        with patch.object(adapters, 'preflight'), patch.object(adapters, 'systemctl') as service, \
+             patch.object(adapters.backup_capacity, 'filesystem', return_value=(4096, 0, 0)):
+            with self.assertRaises(common.Deferred):
+                adapters.deploy(self.app, self.prepared, self.verified, None, self.state, A)
+        service.assert_not_called()
+        self.assertEqual((self.root / 'app').read_bytes(), b'old executable')
+        self.assertFalse((self.state / 'transaction.json').exists())
+        self.assertFalse(list(self.state.glob('recovery-*')))
+
     def test_failed_health_restores_exact_binary_and_quarantines(self):
         with patch.object(adapters, 'preflight'), patch.object(adapters, 'systemctl'), \
              patch.object(adapters, 'probe', side_effect=[common.Deferred('bad health'), None]):
