@@ -22,10 +22,9 @@ ENV NODE_ENV=production \
 WORKDIR /opt/app
 COPY --chown=node:node backend/dist/sub-store.bundle.js backend/dist/runtime-manifest.json ./
 COPY --chown=node:node frontend-src/dist/ ./frontend/
-COPY --chown=node:node deploy/container-health.mjs ./health.mjs
 RUN mkdir -p /opt/app/data && chown node:node /opt/app/data
 USER node
 WORKDIR /opt/app/data
 EXPOSE 3000
-HEALTHCHECK --interval=20s --timeout=8s --start-period=20s --retries=3 CMD ["node", "/opt/app/health.mjs"]
+HEALTHCHECK --interval=20s --timeout=8s --start-period=20s --retries=3 CMD /bin/busybox wget -q --spider -T 5 "http://127.0.0.1:${SUB_STORE_BACKEND_API_PORT:-3000}/backend/api/health"
 CMD ["node", "/opt/app/sub-store.bundle.js"]

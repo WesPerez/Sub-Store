@@ -29,6 +29,10 @@ const GIST_TOKEN_PATH = 'settings.gistToken';
 const GIST_DOWNLOAD_TOKEN_STRATEGY_PATH = 'settings.gistDownloadTokenStrategy';
 
 export default function register($app) {
+    // Container liveness needs only the live HTTP loop, never runtime env or storage.
+    $app.get('/api/health', (_, res) => {
+        res.set('content-type', 'text/plain').status(200).send('ok\n');
+    });
     // utils
     $app.get('/api/utils/env', getEnv); // get runtime environment
     $app.get('/api/utils/backup', gistBackup); // gist backup actions
