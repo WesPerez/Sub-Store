@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import socket
 import subprocess
 import tempfile
 import threading
@@ -91,12 +92,16 @@ def api(path, password, *, data=None, method=None):
 
 
 def verify_http(password, gateway, port):
-    for path in ('/', '/backend/api/subs', '/backend/api/utils/env', '/backend/api/file/mihomo'):
+    for path in ('/', '/backend/api/subs', '/backend/api/utils/env', '/backend/api/health', '/backend/api/file/mihomo'):
         assert request(BASE + path)[0] == 401
     for path in ('/api/subs', '/download/source-a'):
         assert request(BASE + path)[0] == 404
     env = api('/utils/env', password)
     assert env['meta']['node']['env']['SUB_STORE_FRONTEND_BACKEND_PATH'] == '/backend'
+    for method in ('GET', 'HEAD'):
+        code, body, headers = request(API + '/health', method=method, password=password)
+        assert code == 200 and body == ('ok\n' if method == 'GET' else ''), (method, code, body)
+        assert headers.get('Content-Type', '').startswith('text/plain'), headers
     for key in ('a', 'b'):
         payload = {'name': 'source-' + key, 'displayName': 'CI Source ' + key.upper(),
                    'source': 'remote' if key == 'a' else 'local', 'process': []}
@@ -299,6 +304,78 @@ def verify_client_copy(password):
             browser.close()
 
 
+def verify_health_probe(image, inspected):
+    """Run the shipped non-Node probe against liveness and failure fixtures."""
+    health = inspected['Config']['Healthcheck']
+    assert (health['Interval'], health['Timeout'], health['StartPeriod'], health['Retries']) == (
+        20_000_000_000, 8_000_000_000, 20_000_000_000, 3), health
+    assert health['Test'][0] == 'CMD-SHELL' and len(health['Test']) == 2, health['Test']
+    probe = health['Test'][1]
+    assert '/bin/busybox wget ' in probe and 'node' not in probe and 'utils/env' not in probe, probe
+    # The real running application's default-port probe must pass too.
+    command('docker', 'exec', 'sub-store-ci', '/bin/sh', '-c', probe, timeout=8)
+
+    class HealthFixture(BaseHTTPRequestHandler):
+        status = 200
+        delay = False
+        paths = []
+
+        def do_HEAD(self):
+            self.respond()
+
+        def do_GET(self):
+            self.respond()
+
+        def respond(self):
+            self.paths.append(self.path)
+            if self.delay:
+                time.sleep(7)
+                return
+            self.send_response(self.status)
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+
+        def log_message(self, *_):
+            pass
+
+    fixture = ThreadingHTTPServer(('127.0.0.1', 0), HealthFixture)
+    threading.Thread(target=fixture.serve_forever, daemon=True).start()
+    port = fixture.server_address[1]
+    name = 'sub-store-ci-health-probe'
+
+    def run_probe(port):
+        try:
+            started = time.monotonic()
+            result = subprocess.run([
+                'docker', 'run', '--rm', '--name', name, '--network', 'host',
+                '--entrypoint', '/bin/sh', '-e', f'SUB_STORE_BACKEND_API_PORT={port}',
+                image, '-c', probe,
+            ], text=True, capture_output=True, timeout=8)
+            return result, time.monotonic() - started
+        finally:
+            subprocess.run(['docker', 'rm', '-f', name], capture_output=True)
+
+    try:
+        for status in (200, 503, 404):
+            HealthFixture.status = status
+            HealthFixture.paths.clear()
+            result, _ = run_probe(port)
+            assert (result.returncode == 0) == (status == 200), (status, result.returncode)
+            assert HealthFixture.paths and set(HealthFixture.paths) == {'/backend/api/health'}, HealthFixture.paths
+        HealthFixture.delay = True
+        HealthFixture.paths.clear()
+        result, elapsed = run_probe(port)
+        assert result.returncode != 0 and elapsed < 8, 'hung health probe exceeded Docker timeout'
+        assert HealthFixture.paths == ['/backend/api/health'], HealthFixture.paths
+    finally:
+        fixture.shutdown()
+        fixture.server_close()
+    # A reserved but non-listening loopback port must fail, not report healthy.
+    with socket.socket() as refused:
+        refused.bind(('127.0.0.1', 0))
+        assert run_probe(refused.getsockname()[1])[0].returncode != 0
+
+
 def main():
     if os.environ.get('GITHUB_ACTIONS') != 'true' or os.environ.get('RUNNER_ENVIRONMENT') != 'github-hosted':
         raise SystemExit('Synthetic deployment acceptance runs only on a GitHub-hosted runner')
@@ -329,6 +406,7 @@ def main():
             command(*compose, 'up', '-d', '--no-build', '--pull', 'never', env=environment)
             wait_ready('http://127.0.0.1:13001/backend/api/utils/env')
             inspected = json.loads(command('docker', 'inspect', 'sub-store-ci'))[0]
+            verify_health_probe(image, inspected)
             gateway = next(iter(inspected['NetworkSettings']['Networks'].values()))['Gateway']
             command('docker', 'run', '-d', '--name', 'sub-store-ci-nginx', '--network', 'host',
                     '-v', str(root / 'nginx.conf') + ':/etc/nginx/nginx.conf:ro',
@@ -344,7 +422,8 @@ def main():
                            'unchanged-upstream-hosts', 'share-scoping', 'invalid-token', 'revoked-token',
                            'mihomo-template', 'client-copy-share-url', 'client-copy-token-reuse',
                            'client-copy-revocation', 'client-copy-failure', 'client-copy-platform',
-                           'pwa-scope', 'container-health']}, indent=2) + '\n')
+                           'pwa-scope', 'container-health', 'non-node-health-probe',
+                           'health-no-env', 'health-failure-and-timeout']}, indent=2) + '\n')
             print('Sub-Store HTTP, browser, subscription metadata and share acceptance passed')
         finally:
             for container in ('sub-store-ci', 'sub-store-ci-nginx'):
