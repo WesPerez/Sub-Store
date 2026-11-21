@@ -3,6 +3,10 @@
 </p>
 <h1 align="center">Sub-Store</h1>
 
+本 fork 的默认分支为 `mine`，包含固定版本的官方前端、Nginx 子路径部署和 GitHub-hosted CI 自动发布。自托管使用方式见 [部署说明](deploy/README.md)，升级与分支约定见 [分支与发布](BRANCH_DEPLOYMENT.md)。
+
+[![Self-hosted CI](https://github.com/WesPerez/Sub-Store/actions/workflows/verify.yml/badge.svg?branch=mine)](https://github.com/WesPerez/Sub-Store/actions/workflows/verify.yml)
+
 > Advanced Subscription Manager for QX, Loon, Surge, Stash, Egern and Shadowrocket
 
 [![Build](https://github.com/sub-store-org/Sub-Store/actions/workflows/main.yml/badge.svg)](https://github.com/sub-store-org/Sub-Store/actions/workflows/main.yml) ![GitHub](https://img.shields.io/github/license/sub-store-org/Sub-Store) ![GitHub issues](https://img.shields.io/github/issues/sub-store-org/Sub-Store) ![GitHub closed pull requests](https://img.shields.io/github/issues-pr-closed-raw/Peng-Ym/Sub-Store) ![Size](https://img.shields.io/github/languages/code-size/sub-store-org/Sub-Store)
