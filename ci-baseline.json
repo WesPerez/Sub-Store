@@ -1,0 +1,11 @@
+{
+  "repository": "WesPerez/watchdeck",
+  "revision": "8d1e703453d85e2d96d6a6ccf84e36b7f216fa23",
+  "paths": ["deploy/auto-update", "scripts/ci_release_artifacts.py"],
+  "adaptations": [
+    "Sub-Store project identity and mine production branch",
+    "Compose image digest from the verified image-metadata artifact",
+    "Stopped application directory recovery copies without automatic data restore",
+    "Sub-Store host configuration, documentation and timer units"
+  ]
+}

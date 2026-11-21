@@ -1,0 +1,13 @@
+# Managed by sub-store/auto-update
+[Unit]
+Description=Check sub-store releases every two minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=2min
+RandomizedDelaySec=15s
+AccuracySec=10s
+Unit=sub-store-auto-update.service
+
+[Install]
+WantedBy=timers.target

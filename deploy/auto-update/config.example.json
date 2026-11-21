@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "state_root": "/var/lib/sub-store-auto-update",
+  "application": {
+    "id": "sub-store",
+    "enabled": true,
+    "repository": "WesPerez/Sub-Store",
+    "kind": "compose",
+    "root": "/opt/sub-store",
+    "workflow": ".github/workflows/verify.yml",
+    "image": "ghcr.io/wesperez/sub-store",
+    "image_variable": "SUB_STORE_IMAGE",
+    "image_artifact": "image-metadata",
+    "compose_service": "sub-store",
+    "container": "sub-store",
+    "health": {
+      "url": "http://127.0.0.1:13001/backend/api/utils/env",
+      "json": {
+        "status": "success"
+      }
+    },
+    "locks": [
+      "/opt/sub-store/.deploy.lock"
+    ],
+    "databases": [],
+    "data_directories": [
+      "/var/lib/sub-store/data"
+    ]
+  }
+}
